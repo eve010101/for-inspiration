@@ -2,6 +2,10 @@
 .reader-canvas {
   width: 100%;
   height: 100dvh;
+  position: relative;
+  top: auto;
+  left: auto;
+  z-index: 1;
   border: 0;
   padding: 0;
   background: transparent;
@@ -12,6 +16,34 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.reader > button.reader-canvas {
+  position: relative;
+  top: auto;
+  left: auto;
+  z-index: 1;
+}
+
+/* styles.css historically targeted every direct child button. Keep that
+   rule from repositioning the full-screen reader surface. */
+.reader > #close {
+  position: absolute;
+  top: 24px;
+  left: 4vw;
+  z-index: 3;
+  border: 0;
+  background: none;
+  padding: 8px;
+  color: var(--ink);
+  font: 10px var(--mono);
+  letter-spacing: .12em;
+  cursor: pointer;
+}
+
+.reader > #close:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 5px;
+}
+
 .reader-canvas:focus-visible {
   outline: 1px solid var(--ink);
   outline-offset: -8px;
@@ -19,4 +51,11 @@
 
 .reader-index {
   pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .reader > #close {
+    left: 15px;
+    top: 14px;
+  }
 }

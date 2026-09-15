@@ -1,5 +1,10 @@
 # For Inspiration
 
+线上地址：
+
+- 主域名：[https://for-inspiration.pages.dev/](https://for-inspiration.pages.dev/)
+- 当前生产部署（不可变链接）：[https://66a7ab2d.for-inspiration.pages.dev/](https://66a7ab2d.for-inspiration.pages.dev/)
+
 极简的名著名句灵感站点 MVP。点击页面任意位置切换内容；右上角 01/02/03 可切换三种视觉样稿。
 
 当前 `assets/stamps/` 中是 5 枚视觉 demo 素材。正式内容维护在 `make_stamp_set.py` 的 `ITEMS` 中：替换句子、作者、书名和出处后重新运行脚本，即可生成 PNG。

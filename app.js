@@ -5,10 +5,9 @@ const large = document.querySelector('#large-stamp');
 const count = document.querySelector('#reader-count');
 const positions = ['stamp-1', 'stamp-2', 'stamp-3', 'stamp-4', 'stamp-5'];
 const BOOK_COOLDOWN = 10;
-const BUILD_VERSION = '20260915a';
+const BUILD_VERSION = '20260915c';
 let stamps = [], active = 0, busy = false;
 let bookPools = new Map(), recentBooks = [], lastQuoteByBook = new Map();
-let lastAdvanceInputAt = 0;
 
 function shuffle(items) {
   const result = [...items];
@@ -105,23 +104,11 @@ init().catch((error) => {
 });
 document.querySelector('#close').addEventListener('click', (event) => { event.stopPropagation(); closeReader(); });
 
-// The whole reading surface is a native button. This gives mouse, touch,
-// keyboard, and assistive-technology activation the same reliable path.
-function advanceFromInput(event) {
-  const now = performance.now();
-  // Touch/pointer activation is commonly followed by a synthetic click.
-  // Treat that pair as one action so a tap never skips two stamps.
-  if (event.type === 'click' && now - lastAdvanceInputAt < 500) return;
-  lastAdvanceInputAt = now;
-  next();
-}
-readerCanvas.addEventListener('pointerup', advanceFromInput, { passive: true });
-readerCanvas.addEventListener('touchend', advanceFromInput, { passive: true });
-readerCanvas.addEventListener('click', advanceFromInput);
-readerCanvas.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    advanceFromInput(event);
-  }
+// The whole reading surface is a native button. Browsers synthesize a
+// normal click for mouse, touch, Enter, and Space activation; keeping one
+// activation path avoids suppressing a legitimate tap as a duplicate event.
+readerCanvas.addEventListener('click', next);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeReader();
+  if (reader.classList.contains('open') && event.key === 'ArrowRight') next();
 });
-document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeReader(); if (reader.classList.contains('open') && (event.key === 'ArrowRight' || event.key === ' ')) next(); });
