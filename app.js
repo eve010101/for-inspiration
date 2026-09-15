@@ -1,12 +1,14 @@
 const field = document.querySelector('#stamp-field');
 const reader = document.querySelector('#reader');
+const readerCanvas = document.querySelector('#reader-canvas');
 const large = document.querySelector('#large-stamp');
 const count = document.querySelector('#reader-count');
 const positions = ['stamp-1', 'stamp-2', 'stamp-3', 'stamp-4', 'stamp-5'];
 const BOOK_COOLDOWN = 10;
-const BUILD_VERSION = '20260914a';
+const BUILD_VERSION = '20260915a';
 let stamps = [], active = 0, busy = false;
 let bookPools = new Map(), recentBooks = [], lastQuoteByBook = new Map();
+let lastAdvanceInputAt = 0;
 
 function shuffle(items) {
   const result = [...items];
@@ -64,7 +66,18 @@ function closeReader() { reader.classList.remove('open'); reader.setAttribute('a
 function next() {
   if (busy) return;
   busy = true; large.classList.add('changing');
-  setTimeout(() => { render(drawNextIndex()); large.classList.remove('changing'); busy = false; }, 260);
+  setTimeout(() => {
+    try {
+      render(drawNextIndex());
+    } catch (error) {
+      // A changed or malformed data set must not permanently disable the reader.
+      console.error(error);
+      if (stamps.length > 1) render((active + 1) % stamps.length);
+    } finally {
+      large.classList.remove('changing');
+      busy = false;
+    }
+  }, 260);
 }
 async function init() {
   const response = await fetch(`data/quotes.json?v=${BUILD_VERSION}`, { cache: 'no-store' });
@@ -91,17 +104,24 @@ init().catch((error) => {
   document.querySelector('#count').textContent = 'LOAD ERROR';
 });
 document.querySelector('#close').addEventListener('click', (event) => { event.stopPropagation(); closeReader(); });
-// 点击阅读区域任意位置（包括当前邮票）都切换下一句。
-// Delegate clicks from the whole reader layer so image, whitespace, and metadata
-// all behave consistently across mouse and touch browsers.
-reader.addEventListener('click', (event) => {
-  if (event.target.closest('#close')) return;
+
+// The whole reading surface is a native button. This gives mouse, touch,
+// keyboard, and assistive-technology activation the same reliable path.
+function advanceFromInput(event) {
+  const now = performance.now();
+  // Touch/pointer activation is commonly followed by a synthetic click.
+  // Treat that pair as one action so a tap never skips two stamps.
+  if (event.type === 'click' && now - lastAdvanceInputAt < 500) return;
+  lastAdvanceInputAt = now;
   next();
-});
-document.querySelector('#reader-canvas').addEventListener('keydown', (event) => {
+}
+readerCanvas.addEventListener('pointerup', advanceFromInput, { passive: true });
+readerCanvas.addEventListener('touchend', advanceFromInput, { passive: true });
+readerCanvas.addEventListener('click', advanceFromInput);
+readerCanvas.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
-    next();
+    advanceFromInput(event);
   }
 });
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeReader(); if (reader.classList.contains('open') && (event.key === 'ArrowRight' || event.key === ' ')) next(); });
