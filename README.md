@@ -3,7 +3,7 @@
 线上地址：
 
 - 主域名：[https://for-inspiration.pages.dev/](https://for-inspiration.pages.dev/)
-- 当前生产部署（不可变链接）：[https://66a7ab2d.for-inspiration.pages.dev/](https://66a7ab2d.for-inspiration.pages.dev/)
+- 当前生产部署（不可变链接）：[https://5e9726ed.for-inspiration.pages.dev/](https://5e9726ed.for-inspiration.pages.dev/)
 
 极简的名著名句灵感站点 MVP。点击页面任意位置切换内容；右上角 01/02/03 可切换三种视觉样稿。
 
