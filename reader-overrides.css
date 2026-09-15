@@ -53,9 +53,52 @@
   pointer-events: none;
 }
 
+.reader-canvas[aria-busy="true"] {
+  cursor: progress;
+}
+
+.reader-canvas[aria-busy="true"]::after {
+  content: "正在准备下一张…";
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  color: var(--muted);
+  font: 9px var(--mono);
+  letter-spacing: .1em;
+  white-space: nowrap;
+}
+
+.reader-canvas[aria-busy="true"] .reader-index span:last-child {
+  visibility: hidden;
+}
+
+body.reader-preparing .preview {
+  cursor: progress;
+}
+
+.preview:disabled {
+  cursor: progress;
+  pointer-events: none;
+}
+
+body.reader-preparing .instruction {
+  font-size: 0;
+}
+
+body.reader-preparing .instruction::after {
+  content: "正在准备高清邮票…";
+  font: 9px var(--mono);
+  letter-spacing: .12em;
+}
+
 @media (max-width: 720px) {
   .reader > #close {
     left: 15px;
     top: 14px;
+  }
+
+  .reader-canvas[aria-busy="true"]::after {
+    bottom: 22px;
   }
 }
