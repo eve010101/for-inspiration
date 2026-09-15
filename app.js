@@ -4,7 +4,7 @@ const large = document.querySelector('#large-stamp');
 const count = document.querySelector('#reader-count');
 const positions = ['stamp-1', 'stamp-2', 'stamp-3', 'stamp-4', 'stamp-5'];
 const BOOK_COOLDOWN = 10;
-const BUILD_VERSION = '20260909b';
+const BUILD_VERSION = '20260914a';
 let stamps = [], active = 0, busy = false;
 let bookPools = new Map(), recentBooks = [], lastQuoteByBook = new Map();
 
@@ -92,5 +92,16 @@ init().catch((error) => {
 });
 document.querySelector('#close').addEventListener('click', (event) => { event.stopPropagation(); closeReader(); });
 // 点击阅读区域任意位置（包括当前邮票）都切换下一句。
-document.querySelector('#reader-canvas').addEventListener('click', () => next());
+// Delegate clicks from the whole reader layer so image, whitespace, and metadata
+// all behave consistently across mouse and touch browsers.
+reader.addEventListener('click', (event) => {
+  if (event.target.closest('#close')) return;
+  next();
+});
+document.querySelector('#reader-canvas').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    next();
+  }
+});
 document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeReader(); if (reader.classList.contains('open') && (event.key === 'ArrowRight' || event.key === ' ')) next(); });
