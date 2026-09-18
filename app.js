@@ -7,10 +7,12 @@ let large = document.querySelector('#large-stamp');
 const count = document.querySelector('#reader-count');
 const positions = ['stamp-1', 'stamp-2', 'stamp-3', 'stamp-4', 'stamp-5'];
 const BOOK_COOLDOWN = 10;
-const LOOKAHEAD = 4;
+const LOOKAHEAD = 2;
 const MAX_DECODED_ASSETS = 12;
-const ASSET_TIMEOUT_MS = 20000;
-const BUILD_VERSION = '20260915h';
+const ASSET_TIMEOUT_MS = 180000;
+const BUILD_VERSION = '20260918-prod-a';
+const LOOKAHEAD_DELAY_MS = 400;
+const SECONDARY_PREVIEW_DELAY_MS = 12000;
 
 let stamps = [];
 let active = 0;
@@ -18,18 +20,23 @@ let bookPools = new Map();
 let recentBooks = [];
 let lastQuoteByBook = new Map();
 let homeIndexes = [];
-let homeImages = new Map();
+let homeWarmIndexes = [];
 
 // Only decoded candidates may be committed to the reader. Keeping several
 // ready in front means a click never has to wait for a 2.3 MB PNG download.
 let decodedAssets = new Map();
 let inflightAssets = new Map();
+let inflightRecords = new Map();
 let candidateSlots = [];
 let reservedIndexes = new Set();
 let failedIndexes = new Set();
 let pendingAdvance = false;
 let queuedOpenIndex = null;
 let retryTimer = 0;
+let lookaheadTimer = 0;
+let secondaryPreviewTimer = 0;
+let entryRequestSettled = false;
+let activeOriginalFailed = false;
 let readerSession = 0;
 let lastPointerActivationAt = -Infinity;
 
@@ -65,12 +72,29 @@ function assetUrl(index) {
   return `${stamps[index].asset}?v=${BUILD_VERSION}`;
 }
 
+function previewUrl(index) {
+  return `assets/previews/stamp-${String(stamps[index].id).padStart(3, '0')}.webp?v=${BUILD_VERSION}`;
+}
+
 function formatCount(index) {
   return `${String(index + 1).padStart(2, '0')} / ${String(stamps.length).padStart(2, '0')}`;
 }
 
+function isDecodedOriginal(index, image) {
+  if (!image) return false;
+  const expected = new URL(assetUrl(index), window.location.href).href;
+  return image.complete
+    && image.naturalWidth === 1024
+    && image.naturalHeight === 1536
+    && image.src === expected;
+}
+
 function render(index) {
   const decodedImage = decodedAssets.get(index);
+  if (!isDecodedOriginal(index, decodedImage)) {
+    decodedAssets.delete(index);
+    throw new Error(`原图缓存无效：${assetUrl(index)}`);
+  }
   if (decodedImage && decodedImage !== large) {
     const previous = large;
     previous.removeAttribute('id');
@@ -79,18 +103,6 @@ function render(index) {
     decodedImage.removeAttribute('style');
     previous.replaceWith(decodedImage);
     large = decodedImage;
-    if (homeImages.get(index) === decodedImage) {
-      const preview = field.querySelector(`.preview[data-index="${index}"]`);
-      if (preview) {
-        const replacement = decodedImage.cloneNode();
-        replacement.removeAttribute('id');
-        replacement.className = '';
-        preview.appendChild(replacement);
-        homeImages.set(index, replacement);
-      }
-    }
-  } else if (!decodedImage) {
-    large.src = assetUrl(index);
   }
   active = index;
   large.dataset.index = String(index);
@@ -110,29 +122,30 @@ function setHomeOpening(opening) {
   field.toggleAttribute('aria-busy', opening);
 }
 
+function cancelSecondaryPreviewStart() {
+  if (secondaryPreviewTimer) window.clearTimeout(secondaryPreviewTimer);
+  secondaryPreviewTimer = 0;
+}
+
 function rememberDecoded(index, image) {
   decodedAssets.delete(index);
   decodedAssets.set(index, image);
 
-  queueMicrotask(refreshHomeAvailability);
-
   if (decodedAssets.size <= MAX_DECODED_ASSETS) return;
   for (const cachedIndex of decodedAssets.keys()) {
     if (decodedAssets.size <= MAX_DECODED_ASSETS) break;
-    if (cachedIndex === active || reservedIndexes.has(cachedIndex) || homeImages.has(cachedIndex)) continue;
+    if (cachedIndex === active || reservedIndexes.has(cachedIndex) || homeWarmIndexes.includes(cachedIndex)) continue;
     decodedAssets.delete(cachedIndex);
   }
 }
 
-function readyHomeImage(index) {
-  return decodedAssets.get(index) || null;
-}
-
 function preloadAsset(index, priority = 'auto') {
-  const cached = decodedAssets.get(index) || readyHomeImage(index);
-  if (cached) return Promise.resolve(cached);
+  const cached = decodedAssets.get(index);
+  if (isDecodedOriginal(index, cached)) return Promise.resolve(cached);
+  if (cached) decodedAssets.delete(index);
   if (inflightAssets.has(index)) return inflightAssets.get(index);
 
+  let record;
   const promise = new Promise((resolve, reject) => {
     const image = new Image();
     let settled = false;
@@ -142,8 +155,18 @@ function preloadAsset(index, priority = 'auto') {
       window.clearTimeout(timeout);
       callback();
     };
+    const cancel = () => finish(() => {
+      image.onload = null;
+      image.onerror = null;
+      image.src = '';
+      const error = new Error(`图片加载已取消：${assetUrl(index)}`);
+      error.name = 'AbortError';
+      reject(error);
+    });
     const timeout = window.setTimeout(() => {
       finish(() => {
+        image.onload = null;
+        image.onerror = null;
         image.src = '';
         reject(new Error(`图片加载超时：${assetUrl(index)}`));
       });
@@ -156,6 +179,11 @@ function preloadAsset(index, priority = 'auto') {
       } catch {
         // load already proves that the complete PNG can be rendered.
       }
+      if (settled) return;
+      if (!isDecodedOriginal(index, image)) {
+        finish(() => reject(new Error(`原图校验失败：${assetUrl(index)}`)));
+        return;
+      }
       finish(() => {
         rememberDecoded(index, image);
         resolve(image);
@@ -163,22 +191,39 @@ function preloadAsset(index, priority = 'auto') {
     };
     image.onload = markLoaded;
     image.onerror = () => finish(() => reject(new Error(`图片加载失败：${assetUrl(index)}`)));
+    record = { image, cancel, promise: null };
+    inflightRecords.set(index, record);
     image.src = assetUrl(index);
     if (image.complete && image.naturalWidth) queueMicrotask(markLoaded);
   });
 
-  const tracked = promise.then(
+  let tracked;
+  const cleanup = () => {
+    if (inflightAssets.get(index) === tracked) inflightAssets.delete(index);
+    if (inflightRecords.get(index) === record) inflightRecords.delete(index);
+  };
+  tracked = promise.then(
     (image) => {
-      inflightAssets.delete(index);
+      cleanup();
       return image;
     },
     (error) => {
-      inflightAssets.delete(index);
+      cleanup();
       throw error;
     },
   );
+  record.promise = tracked;
   inflightAssets.set(index, tracked);
   return tracked;
+}
+
+function cancelInflightAssets() {
+  for (const [index, record] of [...inflightRecords.entries()]) {
+    if (inflightRecords.get(index) !== record) continue;
+    inflightRecords.delete(index);
+    if (inflightAssets.get(index) === record.promise) inflightAssets.delete(index);
+    record.cancel();
+  }
 }
 
 function consumeIndex(index) {
@@ -208,13 +253,12 @@ function chooseCandidate() {
     if (projectedRecent.includes(book)) continue;
     const index = peekAvailableIndex(book);
     if (index === undefined) continue;
-    const isReady = Boolean(decodedAssets.get(index) || readyHomeImage(index));
-    const isHomeAsset = homeIndexes.includes(index);
+    const isReady = Boolean(decodedAssets.get(index));
     const isInflight = inflightAssets.has(index);
     options.push({
       index,
       book,
-      score: isReady ? 3 : (isHomeAsset ? 2 : (isInflight ? 1 : 0)),
+      score: isReady ? 3 : (isInflight ? 2 : 0),
       status: 'loading',
     });
   }
@@ -227,7 +271,8 @@ function chooseCandidate() {
 function chooseReadyHomeIndex(excludedIndex) {
   return shuffle(homeIndexes).find((index) => (
     index !== excludedIndex
-    && Boolean(decodedAssets.get(index) || readyHomeImage(index))
+    && stamps[index].book !== stamps[excludedIndex].book
+    && Boolean(decodedAssets.get(index))
   ));
 }
 
@@ -275,12 +320,16 @@ function commitCandidate(candidate) {
   // is already decoded, so the old stamp never lingers behind a new counter.
   render(candidate.index);
   setWaiting(false);
-  ensureLookahead(readerSession);
+  if (lookaheadTimer) {
+    window.clearTimeout(lookaheadTimer);
+    lookaheadTimer = 0;
+  }
+  scheduleLookahead(readerSession);
   return true;
 }
 
-function startCandidate(candidate, session) {
-  preloadAsset(candidate.index, 'high').then(() => {
+function startCandidate(candidate, session, priority = 'auto') {
+  preloadAsset(candidate.index, priority).then(() => {
     if (
       session !== readerSession
       || !reader.classList.contains('open')
@@ -301,18 +350,28 @@ function startCandidate(candidate, session) {
 function ensureLookahead(session = readerSession) {
   if (session !== readerSession || !reader.classList.contains('open')) return;
 
-  while (candidateSlots.length < LOOKAHEAD) {
+  const targetSlots = entryRequestSettled ? LOOKAHEAD : 1;
+  while (candidateSlots.length < targetSlots) {
     const candidate = chooseCandidate();
     if (!candidate) break;
     candidateSlots.push(candidate);
     reservedIndexes.add(candidate.index);
-    startCandidate(candidate, session);
+    startCandidate(candidate, session, pendingAdvance ? 'high' : 'auto');
   }
 
   if (pendingAdvance && !candidateSlots.length) {
     setWaiting(true, '网络较慢，正在重试…');
     scheduleRetry(session);
   }
+}
+
+function scheduleLookahead(session = readerSession) {
+  if (lookaheadTimer || session !== readerSession || !reader.classList.contains('open')) return;
+  lookaheadTimer = window.setTimeout(() => {
+    lookaheadTimer = 0;
+    if (session !== readerSession || !reader.classList.contains('open')) return;
+    ensureLookahead(session);
+  }, LOOKAHEAD_DELAY_MS);
 }
 
 function resetReaderWork() {
@@ -323,14 +382,18 @@ function resetReaderWork() {
   large.classList.remove('changing');
   if (retryTimer) window.clearTimeout(retryTimer);
   retryTimer = 0;
+  if (lookaheadTimer) window.clearTimeout(lookaheadTimer);
+  lookaheadTimer = 0;
 }
 
 function enterReader(index, initialCandidateIndex) {
   readerSession += 1;
   resetReaderWork();
   recentBooks = [];
+  entryRequestSettled = false;
+  activeOriginalFailed = false;
   consumeIndex(index);
-  render(index);
+  renderPreview(index);
   if (initialCandidateIndex !== null && initialCandidateIndex !== undefined) {
     candidateSlots.push({
       index: initialCandidateIndex,
@@ -343,56 +406,99 @@ function enterReader(index, initialCandidateIndex) {
   reader.classList.add('open');
   reader.setAttribute('aria-hidden', 'false');
   document.body.classList.add('reading');
-  ensureLookahead(readerSession);
+}
+
+function renderPreview(index) {
+  const previewImage = new Image(1024, 1536);
+  previewImage.id = 'large-stamp';
+  previewImage.alt = `第 ${stamps[index].id} 枚文学邮票`;
+  previewImage.dataset.index = String(index);
+  previewImage.decoding = 'async';
+  previewImage.draggable = false;
+  previewImage.src = previewUrl(index);
+  const previous = large;
+  previous.removeAttribute('id');
+  previous.replaceWith(previewImage);
+  large = previewImage;
+  active = index;
+  count.textContent = formatCount(index);
+}
+
+function reserveOptions(index, localFailures = new Set()) {
+  const isEligible = (candidateIndex) => (
+    candidateIndex !== index
+    && stamps[candidateIndex].book !== stamps[index].book
+    && !localFailures.has(candidateIndex)
+  );
+  const ready = homeIndexes.filter((candidateIndex) => (
+    isEligible(candidateIndex) && decodedAssets.has(candidateIndex)
+  ));
+  const warming = homeWarmIndexes.filter((candidateIndex) => (
+    isEligible(candidateIndex) && !ready.includes(candidateIndex)
+  ));
+  const remainingHome = homeIndexes.filter((candidateIndex) => (
+    isEligible(candidateIndex)
+    && !ready.includes(candidateIndex)
+    && !warming.includes(candidateIndex)
+  ));
+  const remainingBooks = shuffle([...bookPools.keys()])
+    .filter((book) => book !== stamps[index].book)
+    .map((book) => peekAvailableIndex(book))
+    .filter((candidateIndex) => (
+      candidateIndex !== undefined
+      && isEligible(candidateIndex)
+      && !ready.includes(candidateIndex)
+      && !warming.includes(candidateIndex)
+      && !remainingHome.includes(candidateIndex)
+    ));
+  return [...ready, ...warming, ...shuffle(remainingHome), ...remainingBooks];
+}
+
+function loadVisibleOriginal(index, session, retrying = false) {
+  entryRequestSettled = false;
+  activeOriginalFailed = false;
+  if (retrying) readerHint.textContent = '正在重新加载高清原图…';
+  preloadAsset(index, 'high').then(() => {
+    if (session !== readerSession || !reader.classList.contains('open')) return;
+    entryRequestSettled = true;
+    if (active === index) {
+      render(index);
+      if (!pendingAdvance) setWaiting(false);
+    }
+    scheduleLookahead(session);
+  }).catch((error) => {
+    if (session !== readerSession || !reader.classList.contains('open')) return;
+    entryRequestSettled = true;
+    if (error.name === 'AbortError') return;
+    console.warn('[reader] visible original preload failed', error);
+    if (active === index && !pendingAdvance) {
+      activeOriginalFailed = true;
+      readerHint.textContent = '原图加载失败，点击重试';
+      return;
+    }
+    scheduleLookahead(session);
+  });
 }
 
 async function openReader(index) {
   if (queuedOpenIndex !== null || reader.classList.contains('open')) return;
-  const session = ++readerSession;
+  cancelSecondaryPreviewStart();
   queuedOpenIndex = index;
-  setHomeOpening(true);
-
-  // The clicked homepage stamp is already visible, but the visitor can beat
-  // the other PNG loads on a slow connection. Do not enter reader mode until
-  // one different, full-quality homepage stamp is ready for the first click.
-  let initialCandidateIndex = chooseReadyHomeIndex(index);
-  if (initialCandidateIndex === undefined) {
-    const fallbacks = homeIndexes.filter((candidateIndex) => candidateIndex !== index);
-    try {
-      initialCandidateIndex = await Promise.any(
-        fallbacks.map(async (candidateIndex) => {
-          await preloadAsset(candidateIndex, 'high');
-          return candidateIndex;
-        }),
-      );
-    } catch (error) {
-      console.warn('[reader] homepage reserve failed; preparing another stamp', error);
-      initialCandidateIndex = null;
-    }
-  }
-
-  if (initialCandidateIndex === null) {
-    // All homepage reserves failed. Keep the visitor on the visible homepage
-    // instead of opening a reader whose first click cannot succeed.
-    if (session === readerSession && queuedOpenIndex === index) {
-      queuedOpenIndex = null;
-      setHomeOpening(false);
-      instruction.textContent = '网络异常，请稍后再试';
-    }
-    return;
-  }
-
-  if (session !== readerSession || queuedOpenIndex !== index) return;
-  queuedOpenIndex = null;
   setHomeOpening(false);
-  enterReader(index, initialCandidateIndex);
+  queuedOpenIndex = null;
+  enterReader(index, null);
+  loadVisibleOriginal(index, readerSession);
 }
 
 function closeReader() {
   readerSession += 1;
   queuedOpenIndex = null;
   setHomeOpening(false);
+  cancelInflightAssets();
+  entryRequestSettled = false;
+  activeOriginalFailed = false;
   resetReaderWork();
+  failedIndexes.clear();
   reader.classList.remove('open');
   reader.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('reading');
@@ -400,6 +506,10 @@ function closeReader() {
 
 function next() {
   if (!stamps.length || !reader.classList.contains('open')) return;
+  if (activeOriginalFailed) {
+    loadVisibleOriginal(active, readerSession, true);
+    return;
+  }
   const candidate = takeReadyCandidate();
   if (candidate) {
     commitCandidate(candidate);
@@ -409,44 +519,11 @@ function next() {
   // Do not change only the page number. Keep the current image and counter
   // consistent, coalesce rapid clicks, then commit one fully decoded asset.
   setWaiting(true);
-  ensureLookahead(readerSession);
-}
-
-function registerHomeImage(index, image) {
-  homeImages.set(index, image);
-  if (!image.complete) image.addEventListener('load', refreshHomeAvailability, { once: true });
-}
-
-function refreshHomeAvailability() {
-  const readyIndexes = homeIndexes.filter((index) => {
-    if (decodedAssets.has(index)) return true;
-    const image = homeImages.get(index);
-    if (!image?.naturalWidth) return false;
-    const detachedCopy = image.cloneNode();
-    detachedCopy.removeAttribute('id');
-    rememberDecoded(index, detachedCopy);
-    return true;
-  });
-  let hasEnabledButton = false;
-  field.querySelectorAll('.preview').forEach((button) => {
-    const index = Number(button.dataset.index);
-    const canOpen = readyIndexes.includes(index) && readyIndexes.some((other) => (
-      other !== index && stamps[other].book !== stamps[index].book
-    ));
-    button.disabled = !canOpen;
-    button.setAttribute('aria-disabled', String(!canOpen));
-    hasEnabledButton ||= canOpen;
-  });
-  if (!document.body.classList.contains('reader-preparing')) {
-    instruction.textContent = hasEnabledButton ? '点击任意一枚邮票' : '高清邮票加载中…';
+  if (lookaheadTimer) {
+    window.clearTimeout(lookaheadTimer);
+    lookaheadTimer = 0;
   }
-}
-
-function watchHomeAvailability() {
-  if (field.querySelectorAll('.preview:not(:disabled)').length) return;
-  refreshHomeAvailability();
-  if (field.querySelectorAll('.preview:not(:disabled)').length) return;
-  window.setTimeout(watchHomeAvailability, 250);
+  ensureLookahead(readerSession);
 }
 
 async function init() {
@@ -461,10 +538,24 @@ async function init() {
   document.querySelector('#count').textContent = `${String(stamps.length).padStart(2, '0')} PIECES`;
   count.textContent = `01 / ${String(stamps.length).padStart(2, '0')}`;
 
-  // Reuse the already-loaded lossless homepage PNGs as the first lookahead.
+  // The homepage uses lightweight derivatives. Full-resolution originals are
+  // a separate channel and never block the five preview buttons.
   const homeBooks = shuffle([...bookPools.keys()]).slice(0, positions.length);
   homeIndexes = homeBooks.map((book) => bookPools.get(book)[0]);
-  instruction.textContent = '高清邮票加载中…';
+  homeWarmIndexes = [homeIndexes[2], homeIndexes[0]].filter((index) => index !== undefined);
+  instruction.textContent = '邮票加载中…';
+  let secondaryPreviewsStarted = false;
+  const secondaryPreviewImages = [];
+  const startSecondaryPreviews = () => {
+    if (secondaryPreviewsStarted || queuedOpenIndex !== null || reader.classList.contains('open')) return;
+    secondaryPreviewsStarted = true;
+    secondaryPreviewImages.forEach((image) => {
+      image.src = image.dataset.src;
+      delete image.dataset.src;
+    });
+    if (secondaryPreviewTimer) window.clearTimeout(secondaryPreviewTimer);
+    secondaryPreviewTimer = 0;
+  };
   homeIndexes.forEach((stampIndex, position) => {
     const stamp = stamps[stampIndex];
     const button = document.createElement('button');
@@ -472,23 +563,40 @@ async function init() {
     button.className = `preview ${positions[position]}`;
     button.dataset.index = String(stampIndex);
     button.disabled = true;
+    button.setAttribute('aria-disabled', 'true');
     button.setAttribute('aria-label', `打开第 ${stamp.id} 枚邮票`);
-    image.src = assetUrl(stampIndex);
     image.alt = `第 ${stamp.id} 枚文学邮票`;
     image.decoding = 'async';
-    image.fetchPriority = position < 2 ? 'high' : 'auto';
+    image.width = 512;
+    image.height = 768;
+    image.fetchPriority = position === 2 ? 'high' : 'auto';
+    image.addEventListener('load', () => {
+      button.disabled = false;
+      button.setAttribute('aria-disabled', 'false');
+      if (!document.body.classList.contains('reader-preparing')) {
+        instruction.textContent = '点击任意一枚邮票';
+      }
+      if (position === 2) startSecondaryPreviews();
+    }, { once: true });
+    image.addEventListener('error', () => {
+      button.setAttribute('aria-label', `第 ${stamp.id} 枚邮票预览加载失败`);
+      if (position === 2) startSecondaryPreviews();
+    }, { once: true });
     button.appendChild(image);
     button.addEventListener('click', () => openReader(stampIndex));
     field.appendChild(button);
-    registerHomeImage(stampIndex, image);
-    // This shares the browser cache with the DOM preview and gives the reader
-    // an explicit readiness promise without changing or compressing the PNG.
-    preloadAsset(stampIndex, position < 2 ? 'high' : 'auto')
-      .then(refreshHomeAvailability)
-      .catch(() => {});
+    if (position === 2) {
+      image.src = previewUrl(stampIndex);
+    } else {
+      image.dataset.src = previewUrl(stampIndex);
+      secondaryPreviewImages.push(image);
+    }
   });
-  refreshHomeAvailability();
-  watchHomeAvailability();
+  secondaryPreviewTimer = window.setTimeout(startSecondaryPreviews, SECONDARY_PREVIEW_DELAY_MS);
+
+  // Originals intentionally start only after a visitor chooses a preview.
+  // This keeps the homepage fast and prevents speculative PNGs competing
+  // with the clicked stamp on constrained connections.
 }
 
 init().catch((error) => {
