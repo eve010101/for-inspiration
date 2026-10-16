@@ -1,7 +1,7 @@
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 from pathlib import Path
 
-root = Path(r"C:\Users\weimi\Documents\ChatGPT\New project")
+root = Path(__file__).resolve().parent
 base = Image.open(root / "assets" / "stamp-paper-transparent.png").convert("RGBA")
 w, h = base.size
 panel_h = int(h * 0.43)

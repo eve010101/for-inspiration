@@ -1,8 +1,12 @@
 from PIL import Image, ImageFilter, ImageOps
 from pathlib import Path
+import argparse
 
-source = Path(r"C:\Users\weimi\Desktop\general-1-2026-09-01T08_45_52Z.png")
-out = Path(r"C:\Users\weimi\Documents\ChatGPT\New project\assets")
+ROOT = Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(description="从原始纸张图片生成邮票模板。")
+parser.add_argument("source", nargs="?", type=Path, default=ROOT / "assets" / "stamp-paper.png")
+source = parser.parse_args().source
+out = ROOT / "assets"
 out.mkdir(exist_ok=True)
 image = Image.open(source).convert("RGBA")
 gray = ImageOps.grayscale(image)

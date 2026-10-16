@@ -4,6 +4,8 @@
 
 [在线体验](https://for-inspiration.pages.dev/)
 
+[后续维护、运行与发布说明](MAINTENANCE.md) · [GitHub 仓库](https://github.com/eve010101/for-inspiration)
+
 <p align="center">
   <img src="assets/previews/stamp-001.webp" width="180" alt="灵感邮票示例 01">
   <img src="assets/previews/stamp-044.webp" width="180" alt="灵感邮票示例 44">

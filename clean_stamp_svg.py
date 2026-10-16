@@ -1,8 +1,11 @@
 from pathlib import Path
 import re
+import argparse
 
-source = Path(r"C:\Users\weimi\Downloads\“移除背景”项目 - 2026年9月02日 10.48.36.svg")
-output = Path(r"C:\Users\weimi\Documents\ChatGPT\New project\assets\stamp-clean.svg")
+parser = argparse.ArgumentParser(description="清理新导出的 SVG；现有清理结果已保存在 assets/stamp-clean.svg。")
+parser.add_argument("source", type=Path, help="待清理的 SVG 文件路径")
+source = parser.parse_args().source
+output = Path(__file__).resolve().parent / "assets" / "stamp-clean.svg"
 output.parent.mkdir(exist_ok=True)
 
 svg = source.read_text(encoding="utf-8")

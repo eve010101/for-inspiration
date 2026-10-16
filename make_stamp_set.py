@@ -1,8 +1,7 @@
 from pathlib import Path
 import json
 import math
-import re
-import sys
+import argparse
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
@@ -25,6 +24,14 @@ COLORS = [
 def clipped(layer):
     layer.putalpha(ImageChops.multiply(layer.getchannel("A"), ALPHA))
     return layer
+
+
+parser = argparse.ArgumentParser(description="从 data/quotes.json 生成邮票原图；不指定编号则生成全部。")
+parser.add_argument("ids", nargs="*", type=int)
+parser.add_argument("--quote-font", default="C:/Windows/Fonts/simfang.ttf")
+parser.add_argument("--detail-font", default="C:/Windows/Fonts/simsun.ttc")
+parser.add_argument("--mono-font", default="C:/Windows/Fonts/consola.ttf")
+args = parser.parse_args()
 
 
 def font(path, size):
@@ -63,7 +70,7 @@ def make_art(c1, c2, seed):
 
 def fit_quote(draw, text):
     for size in range(51, 29, -2):
-        selected = font("C:/Windows/Fonts/simfang.ttf", size)
+        selected = font(args.quote_font, size)
         lines = wrap_text(draw, text, selected, W - 200)
         line_height = math.ceil(size * 1.65)
         if len(lines) <= 5 and len(lines) * line_height <= H * 0.34:
@@ -72,13 +79,13 @@ def fit_quote(draw, text):
 
 
 quotes = json.loads(DATA.read_text(encoding="utf-8"))
-requested_ids = {int(value) for value in sys.argv[1:]}
+requested_ids = set(args.ids)
 if requested_ids:
     quotes = [item for item in quotes if item["id"] in requested_ids]
 OUT.mkdir(parents=True, exist_ok=True)
-author_font = font("C:/Windows/Fonts/simsun.ttc", 35)
-meta_font = font("C:/Windows/Fonts/consola.ttf", 19)
-detail_font = font("C:/Windows/Fonts/simsun.ttc", 29)
+author_font = font(args.detail_font, 35)
+meta_font = font(args.mono_font, 19)
+detail_font = font(args.detail_font, 29)
 
 for item in quotes:
     idx = item["id"]

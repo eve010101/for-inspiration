@@ -1,0 +1,18 @@
+{
+  "name": "for-inspiration",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional browser checks for the static inspiration stamp website",
+  "scripts": {
+    "test:desktop": "node tests/performance-regression.cjs",
+    "test:touch": "node tests/touch-regression.cjs",
+    "test:cache": "node tests/cache-reopen-regression.cjs",
+    "test:slow": "node tests/slow-reader-regression.cjs",
+    "check:home": "node tests/performance-home.cjs",
+    "check:entry": "node tests/reader-entry-performance.cjs",
+    "check:waterfall": "node tests/load-waterfall.cjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}
